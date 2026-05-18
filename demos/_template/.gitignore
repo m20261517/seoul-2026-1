@@ -5,7 +5,8 @@ __pycache__/
 venv/
 .env
 .streamlit/secrets.toml
-
+﻿KMA_KEY = 12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263
+﻿KMA_KEY = 12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263
 # 실제 학생 데이터 보호 — sample_data.csv만 예외
 *.csv
 !sample_data.csv
