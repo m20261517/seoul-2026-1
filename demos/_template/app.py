@@ -7,13 +7,9 @@ from urllib.parse import quote
 # 🎫 공공데이터포털 API KEY (반드시 본인 발급키로 적용)
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
 ENCODED_KEY = quote(SERVICE_KEY, safe='')             # 기상청 API에서 사용
-ENCODED_DUST_KEY = quote(ENCODED_KEY, safe='')        # 미세먼지(에어코리아) API에서 사용
 
 # 기상청 격자 좌표 (성남시 분당구청 부근)
 GRID_NX, GRID_NY = 127, 202
-
-# 미세먼지 측정소명 (성남시)
-DUST_STATION = quote("성남시")
 
 st.set_page_config(
     page_title="야외수업 가능 날씨 앱 (공공데이터포털 API)",
@@ -22,7 +18,7 @@ st.set_page_config(
 )
 
 st.title("📊 야외수업 가능 날씨 앱")
-st.caption("공공데이터포털 기상청/에어코리아 실시간 데이터 기반 야외수업 판단")
+st.caption("공공데이터포털 기상청 실시간 데이터 기반 야외수업 판단")
 
 def fetch_weather():
     # 기준 날짜/시간 설정 (예보는 0200, 0500, ... 등 3시간 간격만 제공)
@@ -51,36 +47,18 @@ def fetch_weather():
     try:
         res = requests.get(url, timeout=5)
         items = res.json()["response"]["body"]["items"]["item"]
-        # 현시각 예보값 추출
         TMP = next(float(i["fcstValue"]) for i in items if i["category"] == "TMP")
         POP = next(float(i["fcstValue"]) for i in items if i["category"] == "POP")
         return TMP, POP
     except Exception as e:
         return None, None
 
-def fetch_dust():
-    url = (
-        "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty"
-        f"?serviceKey={ENCODED_DUST_KEY}&returnType=json&numOfRows=1&pageNo=1&stationName={DUST_STATION}&dataTerm=DAILY&ver=1.3"
-    )
-    try:
-        res = requests.get(url, timeout=5)
-        items = res.json()["response"]["body"]["items"]
-        pm10 = items[0].get("pm10Value", None)
-        # 값이 비정상인 경우 None
-        dust = int(pm10) if pm10 and pm10.isdigit() else None
-        return dust
-    except Exception as e:
-        return None
-
-def judge(temp, rain_prob, dust):
+def judge(temp, rain_prob):
     reasons = []
-    if temp is None or rain_prob is None or dust is None:
+    if temp is None or rain_prob is None:
         return "데이터 수집 실패(네트워크 또는 API 오류)"
     if not (15 <= temp <= 32):
         reasons.append("기온이 15~32도가 아님")
-    if dust is None or dust > 80:
-        reasons.append("미세먼지가 보통(80)이하가 아님")
     if rain_prob is not None and rain_prob > 30:
         reasons.append("강수확률이 30% 이하가 아님")
     if not reasons:
@@ -91,13 +69,11 @@ def judge(temp, rain_prob, dust):
 st.subheader("① 성남 실시간 데이터 수집 및 판별 결과")
 with st.spinner("실시간 데이터 수집 중 (성남)..."):
     temp, rain_prob = fetch_weather()
-    dust = fetch_dust()
-    판별 = judge(temp, rain_prob, dust)
+    판별 = judge(temp, rain_prob)
     df = pd.DataFrame({
         "장소": ["성남"],
         "기온(°C)": [temp],
         "강수확률(%)": [rain_prob],
-        "미세먼지(㎍/㎥)": [dust],
         "야외수업 판단": [판별]
     })
     st.dataframe(df, use_container_width=True, hide_index=True)
