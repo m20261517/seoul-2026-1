@@ -6,7 +6,8 @@ from urllib.parse import quote
 
 # 🎫 공공데이터포털 API KEY (반드시 본인 발급키로 적용)
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
-ENCODED_KEY = quote(SERVICE_KEY, safe='')
+ENCODED_KEY = quote(SERVICE_KEY, safe='')             # 기상청 API에서 사용
+ENCODED_DUST_KEY = quote(ENCODED_KEY, safe='')        # 미세먼지(에어코리아) API에서 사용
 
 # 기상청 격자 좌표 (성남시 분당구청 부근)
 GRID_NX, GRID_NY = 127, 202
@@ -60,7 +61,7 @@ def fetch_weather():
 def fetch_dust():
     url = (
         "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty"
-        f"?serviceKey={ENCODED_KEY}&returnType=json&numOfRows=1&pageNo=1&stationName={DUST_STATION}&dataTerm=DAILY&ver=1.3"
+        f"?serviceKey={ENCODED_DUST_KEY}&returnType=json&numOfRows=1&pageNo=1&stationName={DUST_STATION}&dataTerm=DAILY&ver=1.3"
     )
     try:
         res = requests.get(url, timeout=5)
