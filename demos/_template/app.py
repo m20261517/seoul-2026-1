@@ -14,11 +14,11 @@ st.set_page_config(
 )
 
 st.title("📊 야외수업 가능 날씨 앱 (실시간 API)")
-st.caption("실시간 기상/미세먼지 API 데이터를 사용하여 서울의 야외수업 가능여부를 바로 판별합니다.")
+st.caption("실시간 기상/미세먼지 API 데이터를 사용하여 성남의 야외수업 가능여부를 바로 판별합니다.")
 
-def fetch_weather_and_dust_seoul():
-    # 서울 위도/경도
-    lat, lon = 37.5665, 126.9780
+def fetch_weather_and_dust_seongnam():
+    # 성남 위도/경도 (십진수)
+    lat, lon = 37.3317, 127.1894
     url_weather = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric"
     url_dust = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={DUST_API_KEY}"
 
@@ -77,13 +77,13 @@ def judge(temp, rain_prob, dust):
         s = "·".join(reasons)
         return f"아쉽지만 오늘은 야외수업을 못해요. 그 이유는 {s} 때문이에요."
 
-st.subheader("① 서울 실시간 데이터 수집 및 판별 결과")
+st.subheader("① 성남 실시간 데이터 수집 및 판별 결과")
 
-with st.spinner("실시간 데이터 수집 중 (서울)..."):
-    temp, rain_prob, dust = fetch_weather_and_dust_seoul()
+with st.spinner("실시간 데이터 수집 중 (성남)..."):
+    temp, rain_prob, dust = fetch_weather_and_dust_seongnam()
     판별 = judge(temp, rain_prob, dust)
     df = pd.DataFrame({
-        "장소": ["서울"],
+        "장소": ["성남"],
         "기온(°C)": [temp],
         "강수량(mm/h)": [rain_prob],
         "미세먼지(㎍/㎥)": [dust],
