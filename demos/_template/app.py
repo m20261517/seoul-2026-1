@@ -1,91 +1,101 @@
-import io
 import requests
 import pandas as pd
 import streamlit as st
+import datetime
+from urllib.parse import quote
 
-# API Keys (노출 주의)
-WEATHER_API_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
-DUST_API_KEY    = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
+# 🎫 공공데이터포털 API KEY (반드시 본인 발급키로 적용)
+SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
+ENCODED_KEY = quote(SERVICE_KEY, safe='')
+
+# 기상청 격자 좌표 (성남시 분당구청 부근)
+GRID_NX, GRID_NY = 127, 202
+
+# 미세먼지 측정소명 (성남시)
+DUST_STATION = quote("성남시")
 
 st.set_page_config(
-    page_title="야외수업 가능 날씨 앱 (실시간 API 연동)",
+    page_title="야외수업 가능 날씨 앱 (공공데이터포털 API)",
     page_icon="📊",
     layout="wide",
 )
 
-st.title("📊 야외수업 가능 날씨 앱 (실시간 API)")
-st.caption("실시간 기상/미세먼지 API 데이터를 사용하여 성남의 야외수업 가능여부를 바로 판별합니다.")
+st.title("📊 야외수업 가능 날씨 앱")
+st.caption("공공데이터포털 기상청/에어코리아 실시간 데이터 기반 야외수업 판단")
 
-def fetch_weather_and_dust_seongnam():
-    # 성남 위도/경도 (십진수)
-    lat, lon = 37.3317, 127.1894
-    url_weather = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric"
-    url_dust = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={DUST_API_KEY}"
+def fetch_weather():
+    # 기준 날짜/시간 설정 (예보는 0200, 0500, ... 등 3시간 간격만 제공)
+    now = datetime.datetime.now()
+    if now.hour < 5:
+        base_time, base_date = "0200", (now - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    elif now.hour < 8:
+        base_time, base_date = "0500", now.strftime("%Y%m%d")
+    elif now.hour < 11:
+        base_time, base_date = "0800", now.strftime("%Y%m%d")
+    elif now.hour < 14:
+        base_time, base_date = "1100", now.strftime("%Y%m%d")
+    elif now.hour < 17:
+        base_time, base_date = "1400", now.strftime("%Y%m%d")
+    elif now.hour < 20:
+        base_time, base_date = "1700", now.strftime("%Y%m%d")
+    elif now.hour < 23:
+        base_time, base_date = "2000", now.strftime("%Y%m%d")
+    else:
+        base_time, base_date = "2300", now.strftime("%Y%m%d")
 
-    # 날씨
+    url = (
+        "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
+        f"?serviceKey={ENCODED_KEY}&numOfRows=100&pageNo=1&dataType=JSON&base_date={base_date}&base_time={base_time}&nx={GRID_NX}&ny={GRID_NY}"
+    )
     try:
-        res_w = requests.get(url_weather, timeout=3)
-        dat_w = res_w.json()
-        temp = dat_w["main"]["temp"]
-        rain_prob = dat_w.get("rain", {}).get("1h", 0)
-        if rain_prob is None:
-            rain_prob = 0
+        res = requests.get(url, timeout=5)
+        items = res.json()["response"]["body"]["items"]["item"]
+        # 현시각 예보값 추출
+        TMP = next(float(i["fcstValue"]) for i in items if i["category"] == "TMP")
+        POP = next(float(i["fcstValue"]) for i in items if i["category"] == "POP")
+        return TMP, POP
     except Exception as e:
-        temp, rain_prob = None, None
+        return None, None
 
-    # 미세먼지
+def fetch_dust():
+    url = (
+        "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty"
+        f"?serviceKey={ENCODED_KEY}&returnType=json&numOfRows=1&pageNo=1&stationName={DUST_STATION}&dataTerm=DAILY&ver=1.3"
+    )
     try:
-        res_d = requests.get(url_dust, timeout=3)
-        dat_d = res_d.json()
-        if "list" in dat_d and len(dat_d["list"]) > 0:
-            dust_value = dat_d["list"][0]["components"].get("pm10", None)
-        else:
-            dust_value = None
+        res = requests.get(url, timeout=5)
+        items = res.json()["response"]["body"]["items"]
+        pm10 = items[0].get("pm10Value", None)
+        # 값이 비정상인 경우 None
+        dust = int(pm10) if pm10 and pm10.isdigit() else None
+        return dust
     except Exception as e:
-        dust_value = None
-
-    return temp, rain_prob, dust_value
-
-def dust_is_ok(val):
-    try:
-        if val is None: return False
-        if isinstance(val, (int, float)):
-            return val <= 80
-        if isinstance(val, str):
-            v = val.strip()
-            if v.isdigit():
-                return int(v) <= 80
-            if v in ["좋음", "보통"]:
-                return True
-        return False
-    except:
-        return False
+        return None
 
 def judge(temp, rain_prob, dust):
     reasons = []
     if temp is None or rain_prob is None or dust is None:
-        return "데이터 수집 실패(네트워크/API 오류)"
+        return "데이터 수집 실패(네트워크 또는 API 오류)"
     if not (15 <= temp <= 32):
-        reasons.append("기온이 15~32도가 아니")
-    if not dust_is_ok(dust):
-        reasons.append("미세먼지가 보통(80)이하가 아니")
+        reasons.append("기온이 15~32도가 아님")
+    if dust is None or dust > 80:
+        reasons.append("미세먼지가 보통(80)이하가 아님")
     if rain_prob is not None and rain_prob > 30:
-        reasons.append("강수확률이 30% 이하가 아니")
+        reasons.append("강수확률이 30% 이하가 아님")
     if not reasons:
         return "오늘은 야외수업 할 수 있어요!"
     else:
-        s = "·".join(reasons)
-        return f"아쉽지만 오늘은 야외수업을 못해요. 그 이유는 {s} 때문이에요."
+        return "아쉽지만 오늘은 야외수업을 못해요. 그 이유는 " + ", ".join(reasons) + " 때문이에요."
 
 st.subheader("① 성남 실시간 데이터 수집 및 판별 결과")
-
 with st.spinner("실시간 데이터 수집 중 (성남)..."):
-    temp, rain_prob, dust = fetch_weather_and_dust_seongnam()
+    temp, rain_prob = fetch_weather()
+    dust = fetch_dust()
     판별 = judge(temp, rain_prob, dust)
     df = pd.DataFrame({
         "장소": ["성남"],
         "기온(°C)": [temp],
-        "강수량(mm/h)": [rain_prob],
+        "강수확률(%)": [rain_prob],
         "미세먼지(㎍/㎥)": [dust],
         "야외수업 판단": [판별]
     })
