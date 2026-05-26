@@ -45,7 +45,7 @@ st.set_page_config(
 )
 
 st.title("🌤️ 점심시간에 나가도 돼요?")
-st.caption("경기도 각 도시의 평일(월~금) 점심(12~13시) 기상청 예보 기반, 운동장/야외활동 허용 여부 앱")
+st.caption("경기도 각 도시의 평일(월~금) 점심(12~13시) 기상청+에어코리아 예보 기반, 운동장/야외활동 허용 여부 앱")
 
 tab1, tab2 = st.tabs(["도시/주간 선택", "평일 점심시간 운동장 가능 여부(월~금)"])
 
@@ -78,28 +78,48 @@ def fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
     except Exception as e:
         return {h: None for h in target_hours}, {h: None for h in target_hours}
 
-def calc_lunch_summary(tmp_dict, pop_dict):
-    temps = [t for t in [tmp_dict['12'], tmp_dict['13']] if t is not None]
-    pops = [p for p in [pop_dict['12'], pop_dict['13']] if p is not None]
-    temp_avg = round(sum(temps)/len(temps), 1) if temps else None
-    pop_max = max(pops) if pops else None
-    return temp_avg, pop_max
+def get_air_quality(station_name):
+    url = (
+        f"http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/"
+        f"getMsrstnAcctoRltmMesureDnsty"
+        f"?serviceKey={SERVICE_KEY}"
+        f"&returnType=json"
+        f"&numOfRows=1"
+        f"&pageNo=1"
+        f"&stationName={station_name}"
+        f"&dataTerm=DAILY"
+        f"&ver=1.3"
+    )
+    try:
+        res = requests.get(url, timeout=5)
+        items = res.json().get("response", {}).get("body", {}).get("items", [])
+        if items:
+            return items[0]["pm10Value"], items[0]["pm10Grade"], items[0]["dataTime"]
+    except Exception:
+        pass
+    return None, None, None
 
-def judge_lunch(tmp_dict, pop_dict):
-    # 12, 13시 모두 데이터 없으면 안내만 표시
+def dust_grade_to_text(grade):
+    # 1: 좋음, 2: 보통, 3: 나쁨, 4: 매우나쁨
+    return {"1":"좋음", "2":"보통", "3":"나쁨", "4":"매우나쁨"}.get(str(grade), "정보없음")
+
+def judge_lunch(tmp_dict, pop_dict, pm10_grade):
+    # 데이터 모두 없음이면 안내
     if all(tmp_dict[h] is None or pop_dict[h] is None for h in ["12", "13"]):
         return "일기예보 발표 후에 안내드릴게요", False
+    # 미세먼지 등급 나쁨(3)이상이면 무조건 불가
+    if pm10_grade and str(pm10_grade) in ["3", "4"]:
+        return "나가면 안돼요: 미세먼지 나쁨 이상", False
     reasons = []
     for h in ["12", "13"]:
         temp = tmp_dict[h]
         pop = pop_dict[h]
         if temp is None or pop is None:
-            continue  # 상세 '데이터 수집 실패' 표기 X
+            continue
         if temp is not None and not (12 <= temp <= 30):
             reasons.append(f"{h}시 기온({temp}도)이 12~30도 아님")
         if pop is not None and pop > 30:
             reasons.append(f"{h}시 강수확률({pop}%) > 30%")
-    # 조건 만족
     if not reasons and all(tmp_dict[h] is not None and pop_dict[h] is not None for h in ["12", "13"]):
         return "나가도 돼요!", True
     elif not reasons:
@@ -112,25 +132,25 @@ with tab2:
         location_name = st.session_state["location_name"]
         week_dates = st.session_state["week_dates"]
         nx, ny = LOCATIONS[location_name]
+        pm10, pm10_grade, pm10_time = get_air_quality(location_name)
         results = []
         data_found = False
-        with st.spinner(f"{location_name} 평일 점심 예보 확인 중..."):
-            for d in week_dates:
-                base_date = d.strftime("%Y%m%d")
-                tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
-                temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
-                result_str, possible = judge_lunch(tmp_dict, pop_dict)
-                # 안내 문구만 남았으면 data_found = True로 처리
-                if temp_avg is not None and pop_max is not None:
-                    data_found = True
-                results.append({
-                    "날짜": d.strftime("%Y-%m-%d"),
-                    "요일": "월화수목금"[d.weekday()],
-                    "점심시간 기온(°C)": temp_avg,
-                    "점심시간 강수확률(%)": pop_max,
-                    "점심시간 운동장": "가능" if possible else "불가",
-                    "사유": result_str
-                })
+        for d in week_dates:
+            base_date = d.strftime("%Y%m%d")
+            tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
+            temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
+            result_str, possible = judge_lunch(tmp_dict, pop_dict, pm10_grade)
+            if temp_avg is not None and pop_max is not None:
+                data_found = True
+            results.append({
+                "날짜": d.strftime("%Y-%m-%d"),
+                "요일": "월화수목금"[d.weekday()],
+                "점심시간 기온(°C)": temp_avg,
+                "점심시간 강수확률(%)": pop_max,
+                "미세먼지(PM10)": f"{pm10} ({dust_grade_to_text(pm10_grade)})" if pm10 else None,
+                "점심시간 운동장": "가능" if possible else "불가",
+                "사유": result_str
+            })
         df = pd.DataFrame(results)
         st.dataframe(df, use_container_width=True, hide_index=True)
         enable_count = sum([x["점심시간 운동장"] == "가능" for x in results])
