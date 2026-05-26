@@ -86,18 +86,24 @@ def calc_lunch_summary(tmp_dict, pop_dict):
     return temp_avg, pop_max
 
 def judge_lunch(tmp_dict, pop_dict):
+    # 12, 13시 모두 데이터 없으면 안내만 표시
+    if all(tmp_dict[h] is None or pop_dict[h] is None for h in ["12", "13"]):
+        return "일기예보 발표 후에 안내드릴게요", False
     reasons = []
     for h in ["12", "13"]:
         temp = tmp_dict[h]
         pop = pop_dict[h]
         if temp is None or pop is None:
-            reasons.append(f"{h}시 데이터 수집 실패")
+            continue  # 상세 '데이터 수집 실패' 표기 X
         if temp is not None and not (12 <= temp <= 30):
             reasons.append(f"{h}시 기온({temp}도)이 12~30도 아님")
         if pop is not None and pop > 30:
             reasons.append(f"{h}시 강수확률({pop}%) > 30%")
-    if not reasons:
+    # 조건 만족
+    if not reasons and all(tmp_dict[h] is not None and pop_dict[h] is not None for h in ["12", "13"]):
         return "나가도 돼요!", True
+    elif not reasons:
+        return "일기예보 발표 후에 안내드릴게요", False
     else:
         return "나가면 안돼요: " + "; ".join(reasons), False
 
@@ -114,6 +120,7 @@ with tab2:
                 tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
                 temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
                 result_str, possible = judge_lunch(tmp_dict, pop_dict)
+                # 안내 문구만 남았으면 data_found = True로 처리
                 if temp_avg is not None and pop_max is not None:
                     data_found = True
                 results.append({
