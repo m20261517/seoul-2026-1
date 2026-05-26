@@ -94,21 +94,23 @@ def get_air_quality(station_name):
         res = requests.get(url, timeout=5)
         items = res.json().get("response", {}).get("body", {}).get("items", [])
         if items:
-            return items[0]["pm10Value"], items[0]["pm10Grade"], items[0]["dataTime"]
+            val = items[0].get("pm10Value")
+            grade = items[0].get("pm10Grade")
+            dt = items[0].get("dataTime")
+            return val, grade, dt
     except Exception:
         pass
     return None, None, None
 
 def dust_grade_to_text(grade):
-    # 1: 좋음, 2: 보통, 3: 나쁨, 4: 매우나쁨
-    return {"1":"좋음", "2":"보통", "3":"나쁨", "4":"매우나쁨"}.get(str(grade), "정보없음")
+    g = str(grade)
+    return {"1": "좋음", "2": "보통", "3": "나쁨", "4": "매우나쁨"}.get(g, "정보없음")
 
 def judge_lunch(tmp_dict, pop_dict, pm10_grade):
-    # 데이터 모두 없음이면 안내
     if all(tmp_dict[h] is None or pop_dict[h] is None for h in ["12", "13"]):
         return "일기예보 발표 후에 안내드릴게요", False
-    # 미세먼지 등급 나쁨(3)이상이면 무조건 불가
-    if pm10_grade and str(pm10_grade) in ["3", "4"]:
+    # 미세먼지 나쁨(3)이상
+    if pm10_grade in ["3", "4", 3, 4]:
         return "나가면 안돼요: 미세먼지 나쁨 이상", False
     reasons = []
     for h in ["12", "13"]:
@@ -127,30 +129,41 @@ def judge_lunch(tmp_dict, pop_dict, pm10_grade):
     else:
         return "나가면 안돼요: " + "; ".join(reasons), False
 
+def calc_lunch_summary(tmp_dict, pop_dict):
+    temps = [t for t in [tmp_dict['12'], tmp_dict['13']] if t is not None]
+    pops = [p for p in [pop_dict['12'], pop_dict['13']] if p is not None]
+    temp_avg = round(sum(temps)/len(temps), 1) if temps else None
+    pop_max = max(pops) if pops else None
+    return temp_avg, pop_max
+
 with tab2:
     if "location_name" in st.session_state and "week_dates" in st.session_state:
         location_name = st.session_state["location_name"]
         week_dates = st.session_state["week_dates"]
         nx, ny = LOCATIONS[location_name]
-        pm10, pm10_grade, pm10_time = get_air_quality(location_name)
         results = []
         data_found = False
-        for d in week_dates:
-            base_date = d.strftime("%Y%m%d")
-            tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
-            temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
-            result_str, possible = judge_lunch(tmp_dict, pop_dict, pm10_grade)
-            if temp_avg is not None and pop_max is not None:
-                data_found = True
-            results.append({
-                "날짜": d.strftime("%Y-%m-%d"),
-                "요일": "월화수목금"[d.weekday()],
-                "점심시간 기온(°C)": temp_avg,
-                "점심시간 강수확률(%)": pop_max,
-                "미세먼지(PM10)": f"{pm10} ({dust_grade_to_text(pm10_grade)})" if pm10 else None,
-                "점심시간 운동장": "가능" if possible else "불가",
-                "사유": result_str
-            })
+        with st.spinner(f"{location_name} 평일 점심 예보 확인 중..."):
+            for d in week_dates:
+                base_date = d.strftime("%Y%m%d")
+                tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
+                pm10, pm10_grade, pm10_time = get_air_quality(location_name)
+                temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
+                result_str, possible = judge_lunch(tmp_dict, pop_dict, pm10_grade)
+                # data_found 조건은 기존과 같음
+                if temp_avg is not None and pop_max is not None:
+                    data_found = True
+                # None 값 방어적으로 처리
+                pm10_str = f"{pm10} ({dust_grade_to_text(pm10_grade)})" if pm10 and pm10_grade else "정보없음"
+                results.append({
+                    "날짜": d.strftime("%Y-%m-%d"),
+                    "요일": "월화수목금"[d.weekday()],
+                    "점심시간 기온(°C)": temp_avg,
+                    "점심시간 강수확률(%)": pop_max,
+                    "미세먼지(PM10)": pm10_str,
+                    "점심시간 운동장": "가능" if possible else "불가",
+                    "사유": result_str
+                })
         df = pd.DataFrame(results)
         st.dataframe(df, use_container_width=True, hide_index=True)
         enable_count = sum([x["점심시간 운동장"] == "가능" for x in results])
