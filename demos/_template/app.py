@@ -4,12 +4,11 @@ import streamlit as st
 import datetime
 from urllib.parse import quote
 
-# 🎫 공공데이터포털 API KEY (반드시 본인 발급키로 적용)
+# 🎫 공공데이터포털 API KEY
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
-ENCODED_KEY = quote(SERVICE_KEY, safe='')             # 기상청 API에서 사용
+ENCODED_KEY = quote(SERVICE_KEY, safe='')
 
-# 경기도 내 주요 도시 격자 좌표
-# (출처: 기상청 nx, ny 좌표)
+# 경기도 28개 시군 nx, ny (기상청 자료 기반)
 LOCATIONS = {
     "수원시": (60, 121),
     "성남시": (127, 202),
@@ -42,123 +41,86 @@ LOCATIONS = {
 }
 
 st.set_page_config(
-    page_title="야외수업 가능 날씨 앱 (공공데이터포털 API)",
-    page_icon="📊",
-    layout="wide",
+    page_title="점심시간에 나가도 돼요?",
+    page_icon="🌤️",
+    layout="wide"
 )
 
-st.title("📊 야외수업 가능 날씨 앱")
-st.caption("공공데이터포털 기상청 실시간 데이터 기반 야외수업/점심시간 운동장 가능성 판단")
+st.title("🌤️ 점심시간에 나가도 돼요?")
+st.caption("경기도 각 도시의 이번 주 점심(12~13시) 기상청 예보 기반, 운동장/야외활동 허용 여부 앱")
 
-tab1, tab2, tab3 = st.tabs([
-    "날짜/지역 지정",
-    "결과 확인",
-    "이번 주 가능 요일(점심시간 포함)"
-])
+tab1, tab2 = st.tabs(["도시/주간 선택", "주간 점심시간 운동장 가능 여부"])
 
 with tab1:
-    # 날짜 선택
-    picked_date = st.date_input(
-        "날짜를 선택하세요",
-        value=datetime.date.today(),
-        min_value=datetime.date.today() - datetime.timedelta(days=7),
-        max_value=datetime.date.today() + datetime.timedelta(days=6)
-    )
+    today = datetime.date.today()
+    location_name = st.selectbox("경기도 도시를 선택하세요", LOCATIONS.keys())
+    monday = today - datetime.timedelta(days=today.weekday())
+    week_dates = [monday + datetime.timedelta(days=i) for i in range(7)]
+    st.write("이번 주:", " ~ ".join([week_dates[0].strftime("%Y-%m-%d"), week_dates[-1].strftime("%Y-%m-%d")]))
+    st.session_state["location_name"] = location_name
+    st.session_state["week_dates"] = week_dates
 
-    # 지역 선택
-    location_name = st.selectbox("지역을 선택하세요", options=list(LOCATIONS.keys()))
-    GRID_NX, GRID_NY = LOCATIONS[location_name]
-
-    # 선택값 저장(세션)
-    st.session_state['picked_date'] = picked_date
-    st.session_state['location_name'] = location_name
-    st.session_state['GRID_NX'] = GRID_NX
-    st.session_state['GRID_NY'] = GRID_NY
-
-def fetch_weather(base_date, nx, ny, base_time="1100", target_hour="12"):
-    """
-    기상청 단기 예보에서 특정 날짜(base_date), 좌표(nx,ny), 발표시간(base_time)의
-    특정 시각(target_hour, HH) 1시간의 TMP/POP(기온/강수확률)을 가져옴
-    """
+def fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"]):
     url = (
-        "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
-        f"?serviceKey={ENCODED_KEY}&numOfRows=100&pageNo=1&dataType=JSON&base_date={base_date}&base_time={base_time}&nx={nx}&ny={ny}"
+        f"http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
+        f"?serviceKey={ENCODED_KEY}&numOfRows=100&pageNo=1&dataType=JSON"
+        f"&base_date={base_date}&base_time={base_time}&nx={nx}&ny={ny}"
     )
+    TMPs, POPs = {}, {}
     try:
         res = requests.get(url, timeout=5)
         items = res.json()["response"]["body"]["items"]["item"]
-        TMP = next(float(i["fcstValue"]) for i in items if i["category"] == "TMP" and i["fcstTime"].startswith(target_hour))
-        POP = next(float(i["fcstValue"]) for i in items if i["category"] == "POP" and i["fcstTime"].startswith(target_hour))
-        return TMP, POP
+        for h in target_hours:
+            tmp = next((float(i["fcstValue"]) for i in items if i["category"] == "TMP" and i["fcstTime"].startswith(h)), None)
+            pop = next((float(i["fcstValue"]) for i in items if i["category"] == "POP" and i["fcstTime"].startswith(h)), None)
+            TMPs[h] = tmp
+            POPs[h] = pop
+        return TMPs, POPs
     except Exception as e:
-        return None, None
+        return {h: None for h in target_hours}, {h: None for h in target_hours}
 
-def judge(temp, rain_prob):
+def judge_lunch(tmp_dict, pop_dict):
     reasons = []
-    if temp is None or rain_prob is None:
-        return "데이터 수집 실패(네트워크 또는 API 오류)"
-    if not (15 <= temp <= 32):
-        reasons.append("기온이 15~32도가 아님")
-    if rain_prob is not None and rain_prob > 30:
-        reasons.append("강수확률이 30% 이하가 아님")
+    for h in ["12", "13"]:
+        temp = tmp_dict[h]
+        pop = pop_dict[h]
+        if temp is None or pop is None:
+            reasons.append(f"{h}시 데이터 수집 실패")
+        if temp is not None and not (12 <= temp <= 30):
+            reasons.append(f"{h}시 기온({temp}도)이 12~30도 아님")
+        if pop is not None and pop > 30:
+            reasons.append(f"{h}시 강수확률({pop}%) > 30%")
     if not reasons:
-        return "오늘은 야외수업 할 수 있어요!"
+        return "나가도 돼요!", True
     else:
-        return "아쉽지만 오늘은 야외수업을 못해요. 그 이유는 " + ", ".join(reasons) + " 때문이에요."
+        return "나가면 안돼요: " + "; ".join(reasons), False
 
 with tab2:
-    picked_date = st.session_state.get('picked_date', datetime.date.today())
-    location_name = st.session_state.get('location_name', "수원시")
-    nx = st.session_state.get('GRID_NX', 60)
-    ny = st.session_state.get('GRID_NY', 121)
-    base_date = picked_date.strftime("%Y%m%d")
+    if "location_name" in st.session_state and "week_dates" in st.session_state:
+        location_name = st.session_state["location_name"]
+        week_dates = st.session_state["week_dates"]
+        nx, ny = LOCATIONS[location_name]
+        results = []
 
-    st.subheader(f"① {location_name} {picked_date} 데이터 판별 결과")
-    with st.spinner(f"실시간 데이터 수집 중..."):
-        temp, rain_prob = fetch_weather(base_date, nx, ny, base_time="1100", target_hour="12")
-        판별 = judge(temp, rain_prob)
-        df = pd.DataFrame({
-            "장소": [location_name],
-            "기온(°C)": [temp],
-            "강수확률(%)": [rain_prob],
-            "야외수업 판단": [판별]
-        })
+        with st.spinner(f"{location_name} 주간 점심 예보 확인 중..."):
+            for d in week_dates:
+                base_date = d.strftime("%Y%m%d")
+                tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
+                result_str, possible = judge_lunch(tmp_dict, pop_dict)
+                results.append({
+                    "날짜": d.strftime("%Y-%m-%d"),
+                    "요일": "월화수목금토일"[d.weekday()],
+                    "12시(도)": tmp_dict['12'],
+                    "12시(%)": pop_dict['12'],
+                    "13시(도)": tmp_dict['13'],
+                    "13시(%)": pop_dict['13'],
+                    "점심시간 운동장": "가능" if possible else "불가",
+                    "사유": result_str
+                })
+        df = pd.DataFrame(results)
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.subheader("② 가능/불가능 요약")
-        if 판별 == "오늘은 야외수업 할 수 있어요!":
-            st.metric("야외수업 가능 일수", "1 일")
-        elif 판별.startswith("아쉽지만"):
-            st.metric("야외수업 가능 일수", "0 일")
-        else:
-            st.warning("판별 데이터를 정상적으로 불러올 수 없습니다.")
 
-with tab3:
-    st.subheader("이번 주(월~일) 야외수업 / 점심시간 운동장 가능 요일")
-    # 기준: 선택된 지역, 이번 주 월요일~일요일
-    nx = st.session_state.get('GRID_NX', 60)
-    ny = st.session_state.get('GRID_NY', 121)
-    location_name = st.session_state.get('location_name', "수원시")
-    today = datetime.date.today()
-    monday = today - datetime.timedelta(days=today.weekday())
-    week_dates = [monday + datetime.timedelta(days=i) for i in range(7)]
-
-    status_list = []
-    for d in week_dates:
-        base_date = d.strftime("%Y%m%d")
-        # 12시 예보(점심): 11:00 발표를 기준으로 12시 값 사용
-        temp, rain_prob = fetch_weather(base_date, nx, ny, base_time="1100", target_hour="12")
-        can_class = "O" if (temp is not None and rain_prob is not None and 15 <= temp <= 32 and rain_prob <= 30) else "X"
-        # 점심시간 운동장(야외활동) 가능 여부 (동일 기준)
-        can_lunch = "가능" if can_class == "O" else "불가능"
-
-        status_list.append({
-            "날짜": d.strftime("%m/%d"),
-            "요일": ["월","화","수","목","금","토","일"][d.weekday()],
-            "기온(°C)": temp,
-            "강수확률(%)": rain_prob,
-            "야외수업": can_class,
-            "점심시간 운동장": can_lunch
-        })
-
-    df_week = pd.DataFrame(status_list)
-    st.dataframe(df_week, use_container_width=True, hide_index=True)
+        enable_count = sum([x["점심시간 운동장"] == "가능" for x in results])
+        st.metric("이번 주 점심시간 운동장 가능 일수", f"{enable_count} 일")
+    else:
+        st.info("좌측 탭에서 도시를 선택해주세요.")
