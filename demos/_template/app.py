@@ -38,6 +38,16 @@ LOCATIONS = {
     "양평군": (78, 130)
 }
 
+STATION_MAPPING = {
+    "수원시": "수원", "성남시": "성남", "고양시": "고양", "용인시": "기흥",
+    "부천시": "부천", "안산시": "안산", "화성시": "동탄", "남양주시": "남양주",
+    "평택시": "평택", "의정부시": "의정부", "파주시": "파주", "광명시": "광명",
+    "오산시": "오산", "군포시": "군포", "이천시": "이천", "하남시": "하남",
+    "안성시": "안성", "김포시": "김포", "시흥시": "시흥", "광주시": "광주",
+    "양주시": "양주", "여주시": "여주", "구리시": "구리", "과천시": "과천",
+    "포천시": "포천", "의왕시": "의왕", "가평군": "가평", "양평군": "양평"
+}
+
 st.set_page_config(
     page_title="점심시간에 나가도 돼요?",
     page_icon="🌤️",
@@ -147,13 +157,12 @@ with tab2:
             for d in week_dates:
                 base_date = d.strftime("%Y%m%d")
                 tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
-                pm10, pm10_grade, pm10_time = get_air_quality(location_name)
+                mapped_station = STATION_MAPPING.get(location_name, location_name)
+                pm10, pm10_grade, pm10_time = get_air_quality(mapped_station)
                 temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
                 result_str, possible = judge_lunch(tmp_dict, pop_dict, pm10_grade)
-                # data_found 조건은 기존과 같음
                 if temp_avg is not None and pop_max is not None:
                     data_found = True
-                # None 값 방어적으로 처리
                 pm10_str = f"{pm10} ({dust_grade_to_text(pm10_grade)})" if pm10 and pm10_grade else "정보없음"
                 results.append({
                     "날짜": d.strftime("%Y-%m-%d"),
