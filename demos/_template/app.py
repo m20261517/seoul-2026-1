@@ -8,11 +8,37 @@ from urllib.parse import quote
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
 ENCODED_KEY = quote(SERVICE_KEY, safe='')             # 기상청 API에서 사용
 
-# 여러 지역 격자 좌표 예시
+# 경기도 내 주요 도시 격자 좌표
+# (출처: 기상청 nx, ny 좌표)
 LOCATIONS = {
-    "성남시 분당구": (127, 202),
-    "서울 종로구": (60, 127),
-    "부산 중구": (98, 76),
+    "수원시": (60, 121),
+    "성남시": (127, 202),
+    "고양시": (56, 128),
+    "용인시": (66, 120),
+    "부천시": (56, 123),
+    "안산시": (56, 119),
+    "화성시": (59, 119),
+    "남양주시": (73, 134),
+    "평택시": (62, 114),
+    "의정부시": (61, 130),
+    "파주시": (54, 131),
+    "광명시": (58, 125),
+    "오산시": (62, 118),
+    "군포시": (58, 122),
+    "이천시": (72, 122),
+    "하남시": (70, 127),
+    "안성시": (75, 115),
+    "김포시": (55, 128),
+    "시흥시": (56, 122),
+    "광주시": (71, 125),
+    "양주시": (63, 134),
+    "여주시": (82, 126),
+    "구리시": (69, 128),
+    "과천시": (59, 126),
+    "포천시": (69, 138),
+    "의왕시": (60, 123),
+    "가평군": (77, 137),
+    "양평군": (78, 130)
 }
 
 st.set_page_config(
@@ -82,9 +108,9 @@ def judge(temp, rain_prob):
 
 with tab2:
     picked_date = st.session_state.get('picked_date', datetime.date.today())
-    location_name = st.session_state.get('location_name', "성남시 분당구")
-    nx = st.session_state.get('GRID_NX', 127)
-    ny = st.session_state.get('GRID_NY', 202)
+    location_name = st.session_state.get('location_name', "수원시")
+    nx = st.session_state.get('GRID_NX', 60)
+    ny = st.session_state.get('GRID_NY', 121)
     base_date = picked_date.strftime("%Y%m%d")
 
     st.subheader(f"① {location_name} {picked_date} 데이터 판별 결과")
@@ -109,9 +135,9 @@ with tab2:
 with tab3:
     st.subheader("이번 주(월~일) 야외수업 / 점심시간 운동장 가능 요일")
     # 기준: 선택된 지역, 이번 주 월요일~일요일
-    nx = st.session_state.get('GRID_NX', 127)
-    ny = st.session_state.get('GRID_NY', 202)
-    location_name = st.session_state.get('location_name', "성남시 분당구")
+    nx = st.session_state.get('GRID_NX', 60)
+    ny = st.session_state.get('GRID_NY', 121)
+    location_name = st.session_state.get('location_name', "수원시")
     today = datetime.date.today()
     monday = today - datetime.timedelta(days=today.weekday())
     week_dates = [monday + datetime.timedelta(days=i) for i in range(7)]
