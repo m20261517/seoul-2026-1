@@ -4,11 +4,9 @@ import streamlit as st
 import datetime
 from urllib.parse import quote
 
-# 🎫 공공데이터포털 API KEY
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
 ENCODED_KEY = quote(SERVICE_KEY, safe='')
 
-# 경기도 28개 시군 nx, ny (기상청 자료 기반)
 LOCATIONS = {
     "수원시": (60, 121),
     "성남시": (127, 202),
@@ -47,16 +45,17 @@ st.set_page_config(
 )
 
 st.title("🌤️ 점심시간에 나가도 돼요?")
-st.caption("경기도 각 도시의 이번 주 점심(12~13시) 기상청 예보 기반, 운동장/야외활동 허용 여부 앱")
+st.caption("경기도 각 도시의 평일(월~금) 점심(12~13시) 기상청 예보 기반, 운동장/야외활동 허용 여부 앱")
 
-tab1, tab2 = st.tabs(["도시/주간 선택", "주간 점심시간 운동장 가능 여부"])
+tab1, tab2 = st.tabs(["도시/주간 선택", "평일 점심시간 운동장 가능 여부(월~금)"])
 
 with tab1:
     today = datetime.date.today()
     location_name = st.selectbox("경기도 도시를 선택하세요", LOCATIONS.keys())
+    # 이번 주 월요일 계산
     monday = today - datetime.timedelta(days=today.weekday())
-    week_dates = [monday + datetime.timedelta(days=i) for i in range(7)]
-    st.write("이번 주:", " ~ ".join([week_dates[0].strftime("%Y-%m-%d"), week_dates[-1].strftime("%Y-%m-%d")]))
+    week_dates = [monday + datetime.timedelta(days=i) for i in range(5)]  # 월(0)~금(4)
+    st.write("이번 주(월~금):", " ~ ".join([week_dates[0].strftime("%Y-%m-%d"), week_dates[-1].strftime("%Y-%m-%d")]))
     st.session_state["location_name"] = location_name
     st.session_state["week_dates"] = week_dates
 
@@ -78,6 +77,13 @@ def fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
         return TMPs, POPs
     except Exception as e:
         return {h: None for h in target_hours}, {h: None for h in target_hours}
+
+def calc_lunch_summary(tmp_dict, pop_dict):
+    temps = [t for t in [tmp_dict['12'], tmp_dict['13']] if t is not None]
+    pops = [p for p in [pop_dict['12'], pop_dict['13']] if p is not None]
+    temp_avg = round(sum(temps)/len(temps), 1) if temps else None
+    pop_max = max(pops) if pops else None
+    return temp_avg, pop_max
 
 def judge_lunch(tmp_dict, pop_dict):
     reasons = []
@@ -101,26 +107,23 @@ with tab2:
         week_dates = st.session_state["week_dates"]
         nx, ny = LOCATIONS[location_name]
         results = []
-
-        with st.spinner(f"{location_name} 주간 점심 예보 확인 중..."):
+        with st.spinner(f"{location_name} 평일 점심 예보 확인 중..."):
             for d in week_dates:
                 base_date = d.strftime("%Y%m%d")
                 tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
+                temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
                 result_str, possible = judge_lunch(tmp_dict, pop_dict)
                 results.append({
                     "날짜": d.strftime("%Y-%m-%d"),
-                    "요일": "월화수목금토일"[d.weekday()],
-                    "12시(도)": tmp_dict['12'],
-                    "12시(%)": pop_dict['12'],
-                    "13시(도)": tmp_dict['13'],
-                    "13시(%)": pop_dict['13'],
+                    "요일": "월화수목금"[d.weekday()],
+                    "점심시간 기온(°C)": temp_avg,
+                    "점심시간 강수확률(%)": pop_max,
                     "점심시간 운동장": "가능" if possible else "불가",
                     "사유": result_str
                 })
         df = pd.DataFrame(results)
         st.dataframe(df, use_container_width=True, hide_index=True)
-
         enable_count = sum([x["점심시간 운동장"] == "가능" for x in results])
-        st.metric("이번 주 점심시간 운동장 가능 일수", f"{enable_count} 일")
+        st.metric("이번 주 평일 점심시간 운동장 가능 일수", f"{enable_count} 일")
     else:
         st.info("좌측 탭에서 도시를 선택해주세요.")
