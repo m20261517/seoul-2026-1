@@ -107,12 +107,15 @@ with tab2:
         week_dates = st.session_state["week_dates"]
         nx, ny = LOCATIONS[location_name]
         results = []
+        data_found = False
         with st.spinner(f"{location_name} 평일 점심 예보 확인 중..."):
             for d in week_dates:
                 base_date = d.strftime("%Y%m%d")
                 tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
                 temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
                 result_str, possible = judge_lunch(tmp_dict, pop_dict)
+                if temp_avg is not None and pop_max is not None:
+                    data_found = True
                 results.append({
                     "날짜": d.strftime("%Y-%m-%d"),
                     "요일": "월화수목금"[d.weekday()],
@@ -125,5 +128,7 @@ with tab2:
         st.dataframe(df, use_container_width=True, hide_index=True)
         enable_count = sum([x["점심시간 운동장"] == "가능" for x in results])
         st.metric("이번 주 평일 점심시간 운동장 가능 일수", f"{enable_count} 일")
+        if not data_found:
+            st.info("일기예보 발표 후에 안내드릴게요")
     else:
         st.info("좌측 탭에서 도시를 선택해주세요.")
