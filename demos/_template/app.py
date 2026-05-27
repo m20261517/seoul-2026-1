@@ -7,13 +7,24 @@ from urllib.parse import quote
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
 ENCODED_KEY = quote(SERVICE_KEY, safe='')
 
+# 경기도의 실제 Air Korea 관측소명을 LOCATIONS 키로 사용
 LOCATIONS = {
-    "수원시": (60, 121),
-    "성남시": (127, 202),
-    "고양시": (56, 128),
-    "용인시": (66, 120),
+    "수원시 영통구": (60, 121),
+    "수원시 권선구": (60, 121),
+    "수원시 장안구": (60, 121),
+    "수원시 팔달구": (60, 121),
+    "성남시 중원구": (127, 202),
+    "성남시 분당구": (127, 202),
+    "성남시 수정구": (127, 202),
+    "용인시 기흥구": (66, 120),
+    "용인시 수지구": (66, 120),
+    "용인시 처인구": (66, 120),
+    "고양시 덕양구": (56, 128),
+    "고양시 일산동구": (56, 128),
+    "고양시 일산서구": (56, 128),
     "부천시": (56, 123),
-    "안산시": (56, 119),
+    "안산시 단원구": (56, 119),
+    "안산시 상록구": (56, 119),
     "화성시": (59, 119),
     "남양주시": (73, 134),
     "평택시": (62, 114),
@@ -38,16 +49,6 @@ LOCATIONS = {
     "양평군": (78, 130)
 }
 
-STATION_MAPPING = {
-    "수원시": "수원", "성남시": "성남", "고양시": "고양", "용인시": "기흥",
-    "부천시": "부천", "안산시": "안산", "화성시": "동탄", "남양주시": "남양주",
-    "평택시": "평택", "의정부시": "의정부", "파주시": "파주", "광명시": "광명",
-    "오산시": "오산", "군포시": "군포", "이천시": "이천", "하남시": "하남",
-    "안성시": "안성", "김포시": "김포", "시흥시": "시흥", "광주시": "광주",
-    "양주시": "양주", "여주시": "여주", "구리시": "구리", "과천시": "과천",
-    "포천시": "포천", "의왕시": "의왕", "가평군": "가평", "양평군": "양평"
-}
-
 st.set_page_config(
     page_title="점심시간에 나가도 돼요?",
     page_icon="🌤️",
@@ -55,13 +56,13 @@ st.set_page_config(
 )
 
 st.title("🌤️ 점심시간에 나가도 돼요?")
-st.caption("경기도 각 도시의 평일(월~금) 점심(12~13시) 기상청+에어코리아 예보 기반, 운동장/야외활동 허용 여부 앱")
+st.caption("경기도 각 도시(관측소 단위)의 평일(월~금) 점심(12~13시) 기상청+에어코리아 예보 기반, 운동장/야외활동 허용 여부 앱")
 
 tab1, tab2 = st.tabs(["도시/주간 선택", "평일 점심시간 운동장 가능 여부(월~금)"])
 
 with tab1:
     today = datetime.date.today()
-    location_name = st.selectbox("경기도 도시를 선택하세요", LOCATIONS.keys())
+    location_name = st.selectbox("경기도 도시/구를 선택하세요", LOCATIONS.keys())
     # 이번 주 월요일 계산
     monday = today - datetime.timedelta(days=today.weekday())
     week_dates = [monday + datetime.timedelta(days=i) for i in range(5)]  # 월(0)~금(4)
@@ -157,8 +158,7 @@ with tab2:
             for d in week_dates:
                 base_date = d.strftime("%Y%m%d")
                 tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
-                mapped_station = STATION_MAPPING.get(location_name, location_name)
-                pm10, pm10_grade, pm10_time = get_air_quality(mapped_station)
+                pm10, pm10_grade, pm10_time = get_air_quality(location_name)
                 temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
                 result_str, possible = judge_lunch(tmp_dict, pop_dict, pm10_grade)
                 if temp_avg is not None and pop_max is not None:
