@@ -156,8 +156,6 @@ with tab2:
                     today_result_str, today_possible = result_str, possible
         df = pd.DataFrame(results)
         st.dataframe(df, use_container_width=True, hide_index=True)
-        enable_count = sum([x["점심시간 운동장"] == "가능" for x in results])
-        st.metric("이번 주 평일 점심시간 운동장 가능 일수", f"{enable_count} 일")
         if not data_found:
             st.info("일기예보 발표 후에 안내드릴게요")
         st.markdown("---")
