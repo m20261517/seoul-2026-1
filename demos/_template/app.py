@@ -1,38 +1,67 @@
+import streamlit as st
 import requests
 import pandas as pd
-import streamlit as st
 import datetime
-from urllib.parse import quote
 
+# 에어코리아/생활기상 미세먼지, 자외선 서비스키
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
-ENCODED_KEY = quote(SERVICE_KEY, safe='')
+AIR_API_URL = "http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getCtprvnRltmMesureDnsty"
+UV_API_URL = "http://apis.data.go.kr/1360000/LivingWthrIdxServiceV4/getUVIdxV4"
 
+SIDO_LIST = [
+    "서울", "부산", "대구", "인천", "광주", "대전", "울산", "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주", "세종"
+]
+# areaNo 매핑 (일부 샘플, 확장 가능)
 AREA_NO = {
-    "성남시 분당구": "4113552000",
-    "성남시 중원구": "4113551000",
-    "성남시 수정구": "4113550000",
-    "수원시 영통구": "4111763000",
-    "수원시 장안구": "4111156500",
-    "수원시 권선구": "4111552000",
-    # 필요 지역 계속 추가
+    "서울": "1100000000",
+    "부산": "2600000000",
+    "대구": "2700000000",
+    "인천": "2800000000",
+    "광주": "2900000000",
+    "대전": "3000000000",
+    "울산": "3100000000",
+    "경기": "4100000000",
+    "강원": "4200000000",
+    "충북": "4300000000",
+    "충남": "4400000000",
+    "전북": "4500000000",
+    "전남": "4600000000",
+    "경북": "4700000000",
+    "경남": "4800000000",
+    "제주": "5000000000",
+    "세종": "3611000000",
 }
 
-LOCATIONS = {
-    "수원시 영통구": (60, 121),
-    "수원시 권선구": (60, 121),
-    "수원시 장안구": (60, 121),
-    "수원시 팔달구": (60, 121),
-    "성남시 중원구": (127, 202),
-    "성남시 분당구": (127, 202),
-    "성남시 수정구": (127, 202),
-    # ... 이하 생략
-}
+st.set_page_config(
+    page_title="실시간 미세먼지 조회 대시보드",
+    page_icon="☁️",
+    layout="wide"
+)
+st.title("☁️ 실시간 미세먼지 조회 대시보드")
+
+selected_sido = st.sidebar.selectbox("시/도를 선택하세요", SIDO_LIST)
+today = datetime.date.today()
+yyyymmdd = today.strftime("%Y%m%d")
+uv_query_time = yyyymmdd + "12"  # 자외선은 정오값
+
+def fetch_air_quality(sido_name):
+    params = {
+        "serviceKey": SERVICE_KEY,
+        "returnType": "json",
+        "sidoName": sido_name,
+        "numOfRows": 1000,
+        "pageNo": 1
+    }
+    try:
+        response = requests.get(AIR_API_URL, params=params, timeout=10)
+        response.raise_for_status()
+        items = response.json()["response"]["body"]["items"]
+        return items
+    except Exception:
+        return None
 
 def get_uv_index(area_no, yyyymmddhh):
-    url = (
-        f"http://apis.data.go.kr/1360000/LivingWthrIdxServiceV4/getUVIdxV4"
-        f"?serviceKey={SERVICE_KEY}&areaNo={area_no}&time={yyyymmddhh}&dataType=JSON"
-    )
+    url = (f"{UV_API_URL}?serviceKey={SERVICE_KEY}&areaNo={area_no}&time={yyyymmddhh}&dataType=JSON")
     try:
         res = requests.get(url, timeout=5)
         items = res.json()["response"]["body"]["items"]["item"]
@@ -41,162 +70,70 @@ def get_uv_index(area_no, yyyymmddhh):
     except Exception:
         return None
 
-st.set_page_config(
-    page_title="점심시간에 나가도 돼요?",
-    page_icon="🌤️",
-    layout="wide"
-)
-st.title("🌤️ 점심시간에 나가도 돼요?")
-st.caption("경기도 각 도시의 평일 점심(12~13시) 기상+미세먼지+자외선 예보 기반 운동장/야외활동 앱")
+# --- 데이터 가져오기
+air_data = fetch_air_quality(selected_sido)
+area_no = AREA_NO.get(selected_sido)
+uv_value = get_uv_index(area_no, uv_query_time) if area_no else None
 
-tab1, tab2 = st.tabs(["도시/주간 선택", "평일 점심시간 운동장 가능 여부(월~금)"])
+# --- 예외처리/시각화
+if air_data is None:
+    st.error("실시간 미세먼지 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
+elif len(air_data) == 0:
+    st.warning("선택하신 지역의 실시간 대기정보가 없습니다.")
+else:
+    df = pd.DataFrame(air_data)
+    for col in ['pm10Value', 'pm25Value']:
+        df[col] = pd.to_numeric(df[col].replace(['-', ''], pd.NA), errors='coerce')
+    mean_pm10 = df['pm10Value'].mean(skipna=True)
+    mean_pm25 = df['pm25Value'].mean(skipna=True)
 
-with tab1:
-    today = datetime.date.today()
-    location_name = st.selectbox("경기도 도시/구를 선택하세요", LOCATIONS.keys())
-    monday = today - datetime.timedelta(days=today.weekday())
-    week_dates = [monday + datetime.timedelta(days=i) for i in range(5)]
-    st.write("이번 주(월~금):", " ~ ".join([week_dates[0].strftime("%Y-%m-%d"), week_dates[-1].strftime("%Y-%m-%d")]))
-    st.session_state["location_name"] = location_name
-    st.session_state["week_dates"] = week_dates
-
-def fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"]):
-    url = (
-        f"http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
-        f"?serviceKey={ENCODED_KEY}&numOfRows=100&pageNo=1&dataType=JSON"
-        f"&base_date={base_date}&base_time={base_time}&nx={nx}&ny={ny}"
-    )
-    TMPs, POPs = {}, {}
-    try:
-        res = requests.get(url, timeout=5)
-        items = res.json()["response"]["body"]["items"]["item"]
-        for h in target_hours:
-            tmp = next((float(i["fcstValue"]) for i in items if i["category"] == "TMP" and i["fcstTime"].startswith(h)), None)
-            pop = next((float(i["fcstValue"]) for i in items if i["category"] == "POP" and i["fcstTime"].startswith(h)), None)
-            TMPs[h] = tmp
-            POPs[h] = pop
-        return TMPs, POPs
-    except Exception as e:
-        return {h: None for h in target_hours}, {h: None for h in target_hours}
-
-def get_air_quality(station_name):
-    url = (
-        f"http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/"
-        f"getMsrstnAcctoRltmMesureDnsty"
-        f"?serviceKey={SERVICE_KEY}"
-        f"&returnType=json"
-        f"&numOfRows=1"
-        f"&pageNo=1"
-        f"&stationName={station_name}"
-        f"&dataTerm=DAILY"
-        f"&ver=1.3"
-    )
-    try:
-        res = requests.get(url, timeout=5)
-        items = res.json().get("response", {}).get("body", {}).get("items", [])
-        if items:
-            val = items[0].get("pm10Value")
-            grade = items[0].get("pm10Grade")
-            dt = items[0].get("dataTime")
-            return val, grade, dt
-    except Exception:
-        pass
-    return None, None, None
-
-def dust_grade_to_text(grade):
-    g = str(grade)
-    return {"1": "좋음", "2": "보통", "3": "나쁨", "4": "매우나쁨"}.get(g, "정보없음")
-
-def judge_lunch(tmp_dict, pop_dict, pm10_grade):
-    if all(tmp_dict.get(h) is None or pop_dict.get(h) is None for h in ["12", "13"]):
-        return "일기예보 발표 후에 안내드릴게요", False, "아직 기온과 강수확률 예보가 없습니다."
-    if pm10_grade in ["3", "4", 3, 4]:
-        return "나가면 안돼요: 미세먼지 나쁨 이상", False, "미세먼지가 나쁨 또는 매우나쁨이에요. 실내활동을 추천합니다."
-    reasons = []
-    for h in ["12", "13"]:
-        temp = tmp_dict.get(h)
-        pop = pop_dict.get(h)
-        if temp is None or pop is None:
-            continue
-        if temp is not None and not (12 <= temp <= 30):
-            reasons.append(f"{h}시 기온({temp}도)이 12~30도 아님")
-        if pop is not None and pop > 30:
-            reasons.append(f"{h}시 강수확률({pop}%) > 30%")
-    if not reasons and all(tmp_dict.get(h) is not None and pop_dict.get(h) is not None for h in ["12", "13"]):
-        return "나가도 돼요!", True, "기온과 강수, 미세먼지 모두 조건이 좋아요. 즐겁게 야외활동 하세요!"
-    elif not reasons:
-        return "일기예보 발표 후에 안내드릴게요", False, "현재는 아직 예보가 나오지 않았어요."
-    else:
-        return "나가면 안돼요: " + "; ".join(reasons), False, "; ".join(reasons) + " 때문에 야외활동이 어려워요."
-
-def calc_lunch_summary(tmp_dict, pop_dict):
-    temps = [t for t in [tmp_dict.get('12'), tmp_dict.get('13')] if t is not None]
-    pops = [p for p in [pop_dict.get('12'), pop_dict.get('13')] if p is not None]
-    temp_avg = round(sum(temps)/len(temps), 1) if temps else None
-    pop_max = max(pops) if pops else None
-    return temp_avg, pop_max
-
-with tab2:
-    if "location_name" in st.session_state and "week_dates" in st.session_state:
-        location_name = st.session_state["location_name"]
-        week_dates = st.session_state["week_dates"]
-        nx, ny = LOCATIONS[location_name]
-        area_no = AREA_NO.get(location_name)
-        results = []
-        data_found = False
-        today_result_str = ""
-        today_possible = None
-        today_reason = ""
-        today_tmp_dict = None
-        today_pop_dict = None
-        with st.spinner(f"{location_name} 평일 점심 예보 확인 중..."):
-            for i, d in enumerate(week_dates):
-                base_date = d.strftime("%Y%m%d")
-                tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"])
-                is_today = (d == datetime.date.today())
-                temp_dict_show = tmp_dict.copy()
-                if is_today:
-                    if tmp_dict.get("12") is None:
-                        temp_dict_show["12"] = 22.0
-                    if tmp_dict.get("13") is None:
-                        temp_dict_show["13"] = 22.0
-                    today_tmp_dict = temp_dict_show.copy()
-                    today_pop_dict = pop_dict.copy()
-                pm10, pm10_grade, pm10_time = get_air_quality(location_name)
-                temp_avg, pop_max = calc_lunch_summary(temp_dict_show if is_today else tmp_dict, pop_dict)
-                result_str, possible, reason_str = judge_lunch(temp_dict_show if is_today else tmp_dict, pop_dict, pm10_grade)
-                uv_index = get_uv_index(area_no, base_date + "12") if area_no else None
-                if temp_avg is not None and pop_max is not None:
-                    data_found = True
-                pm10_str = f"{pm10} ({dust_grade_to_text(pm10_grade)})" if pm10 and pm10_grade else "정보없음"
-                results.append({
-                    "날짜": d.strftime("%Y-%m-%d"),
-                    "요일": "월화수목금"[d.weekday()],
-                    "점심시간 기온(°C)": temp_avg,
-                    "점심시간 강수확률(%)": pop_max,
-                    "미세먼지(PM10)": pm10_str,
-                    "자외선지수(UV)": uv_index if uv_index else "정보없음",
-                    "점심시간 운동장": "가능" if possible else "불가",
-                    "사유": result_str,
-                    "설명": reason_str
-                })
-                if is_today:
-                    today_result_str, today_possible, today_reason = result_str, possible, reason_str
-        df = pd.DataFrame(results)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        if not data_found:
-            st.info("일기예보 발표 후에 안내드릴게요")
-        st.markdown("---")
-        st.subheader("오늘 점심시간 알림")
-        if today_possible is None or today_result_str == "":
-            st.info("오늘 정보가 아직 공개되지 않았어요.")
-        elif today_possible:
-            st.success("오늘은 점심시간에 나가도 돼요! 🎉")
-            st.caption(f"사유: {today_reason}")
+    # -- 지표 영역: 평균 및 자외선지수
+    col1, col2, col3 = st.columns([1,1,1])
+    col1.metric("평균 미세먼지(PM10)", f"{mean_pm10:.1f} ㎍/㎥" if not pd.isna(mean_pm10) else "-")
+    col2.metric("평균 초미세먼지(PM2.5)", f"{mean_pm25:.1f} ㎍/㎥" if not pd.isna(mean_pm25) else "-")
+    if uv_value is not None and uv_value != "-":
+        uv_float = float(uv_value)
+        uv_int = int(round(uv_float))
+        if uv_int <= 2:
+            level = "낮음 🌤️"
+            guide = "야외활동에 큰 지장 없습니다."
+        elif uv_int <= 5:
+            level = "보통 😎"
+            guide = "가벼운 자외선 차단 권장!"
+        elif uv_int <= 7:
+            level = "높음 🕶️"
+            guide = "모자·선크림·양산 등 보호구 착용 필수"
+        elif uv_int <= 10:
+            level = "매우 높음 ☀️"
+            guide = "한낮 야외활동 자제, 충분히 차단하세요!"
         else:
-            st.error("오늘은 점심시간에 나갈 수 없어요. 😭")
-            st.caption(f"사유: {today_reason}")
-        if today_tmp_dict:
-            st.caption(f"오늘(성남시 분당구) 12/13시 기온: {today_tmp_dict.get('12')}°C / {today_tmp_dict.get('13')}°C")
+            level = "위험 🚨"
+            guide = "실외활동 피하기, 반드시 보호구 착용"
+        col3.metric("오늘 자외선지수(UV)", f"{uv_value} ({level})")
+        with col3:
+            st.caption(f"생활권고: {guide}")
     else:
-        st.info("좌측 탭에서 도시를 선택해주세요.")
+        col3.metric("오늘 자외선지수(UV)", "정보없음")
+
+    # -- 측정소별 상세 데이터
+    st.subheader(f"📊 {selected_sido} 측정소별 실시간 미세먼지 정보")
+    table_df = df[["stationName", "pm10Value", "pm25Value", "dataTime"]].rename(
+        columns={
+            "stationName": "측정소명",
+            "pm10Value": "미세먼지(PM10)",
+            "pm25Value": "초미세먼지(PM2.5)",
+            "dataTime": "측정시각"
+        }
+    )
+    st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    # -- PM10 바 차트
+    st.subheader(f"🟦 {selected_sido} 주요 측정소별 미세먼지(PM10) 비교")
+    graph_df = table_df[["측정소명", "미세먼지(PM10)"]].dropna()
+    if len(graph_df) > 0:
+        graph_df = graph_df.set_index("측정소명").sort_values("미세먼지(PM10)", ascending=False)
+        st.bar_chart(graph_df)
+    else:
+        st.info("PM10 그래프를 그릴 데이터가 부족합니다.")
+
+st.caption("데이터 출처: 공공데이터포털 에어코리아/기상청 생활기상지수 OpenAPI. 1시간 단위 실시간 갱신.")
