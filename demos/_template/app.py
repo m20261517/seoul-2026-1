@@ -7,6 +7,16 @@ from urllib.parse import quote
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
 ENCODED_KEY = quote(SERVICE_KEY, safe='')
 
+AREA_NO = {
+    "성남시 분당구": "4113552000",
+    "성남시 중원구": "4113551000",
+    "성남시 수정구": "4113550000",
+    "수원시 영통구": "4111763000",
+    "수원시 장안구": "4111156500",
+    "수원시 권선구": "4111552000",
+    # 필요 지역 계속 추가
+}
+
 LOCATIONS = {
     "수원시 영통구": (60, 121),
     "수원시 권선구": (60, 121),
@@ -15,8 +25,21 @@ LOCATIONS = {
     "성남시 중원구": (127, 202),
     "성남시 분당구": (127, 202),
     "성남시 수정구": (127, 202),
-    # ... 이하 생략, 기존대로 활용
+    # ... 이하 생략
 }
+
+def get_uv_index(area_no, yyyymmddhh):
+    url = (
+        f"http://apis.data.go.kr/1360000/LivingWthrIdxServiceV4/getUVIdxV4"
+        f"?serviceKey={SERVICE_KEY}&areaNo={area_no}&time={yyyymmddhh}&dataType=JSON"
+    )
+    try:
+        res = requests.get(url, timeout=5)
+        items = res.json()["response"]["body"]["items"]["item"]
+        uv_today = items[0].get("today")
+        return uv_today
+    except Exception:
+        return None
 
 st.set_page_config(
     page_title="점심시간에 나가도 돼요?",
@@ -24,13 +47,13 @@ st.set_page_config(
     layout="wide"
 )
 st.title("🌤️ 점심시간에 나가도 돼요?")
-st.caption("경기도 각 도시(관측소 단위)의 평일(월~금) 점심(12~13시) 기상청+에어코리아 예보 기반, 운동장/야외활동 허용 여부 앱")
+st.caption("경기도 각 도시의 평일 점심(12~13시) 기상+미세먼지+자외선 예보 기반 운동장/야외활동 앱")
 
 tab1, tab2 = st.tabs(["도시/주간 선택", "평일 점심시간 운동장 가능 여부(월~금)"])
 
 with tab1:
     today = datetime.date.today()
-    location_name = st.selectbox("경기도 도시/구를 선택하세요", LOCATIONS.keys(), index=list(LOCATIONS.keys()).index("성남시 분당구"))
+    location_name = st.selectbox("경기도 도시/구를 선택하세요", LOCATIONS.keys())
     monday = today - datetime.timedelta(days=today.weekday())
     week_dates = [monday + datetime.timedelta(days=i) for i in range(5)]
     st.write("이번 주(월~금):", " ~ ".join([week_dates[0].strftime("%Y-%m-%d"), week_dates[-1].strftime("%Y-%m-%d")]))
@@ -86,9 +109,9 @@ def dust_grade_to_text(grade):
 
 def judge_lunch(tmp_dict, pop_dict, pm10_grade):
     if all(tmp_dict.get(h) is None or pop_dict.get(h) is None for h in ["12", "13"]):
-        return "일기예보 발표 후에 안내드릴게요", False
+        return "일기예보 발표 후에 안내드릴게요", False, "아직 기온과 강수확률 예보가 없습니다."
     if pm10_grade in ["3", "4", 3, 4]:
-        return "나가면 안돼요: 미세먼지 나쁨 이상", False
+        return "나가면 안돼요: 미세먼지 나쁨 이상", False, "미세먼지가 나쁨 또는 매우나쁨이에요. 실내활동을 추천합니다."
     reasons = []
     for h in ["12", "13"]:
         temp = tmp_dict.get(h)
@@ -100,11 +123,11 @@ def judge_lunch(tmp_dict, pop_dict, pm10_grade):
         if pop is not None and pop > 30:
             reasons.append(f"{h}시 강수확률({pop}%) > 30%")
     if not reasons and all(tmp_dict.get(h) is not None and pop_dict.get(h) is not None for h in ["12", "13"]):
-        return "나가도 돼요!", True
+        return "나가도 돼요!", True, "기온과 강수, 미세먼지 모두 조건이 좋아요. 즐겁게 야외활동 하세요!"
     elif not reasons:
-        return "일기예보 발표 후에 안내드릴게요", False
+        return "일기예보 발표 후에 안내드릴게요", False, "현재는 아직 예보가 나오지 않았어요."
     else:
-        return "나가면 안돼요: " + "; ".join(reasons), False
+        return "나가면 안돼요: " + "; ".join(reasons), False, "; ".join(reasons) + " 때문에 야외활동이 어려워요."
 
 def calc_lunch_summary(tmp_dict, pop_dict):
     temps = [t for t in [tmp_dict.get('12'), tmp_dict.get('13')] if t is not None]
@@ -118,10 +141,12 @@ with tab2:
         location_name = st.session_state["location_name"]
         week_dates = st.session_state["week_dates"]
         nx, ny = LOCATIONS[location_name]
+        area_no = AREA_NO.get(location_name)
         results = []
         data_found = False
         today_result_str = ""
         today_possible = None
+        today_reason = ""
         today_tmp_dict = None
         today_pop_dict = None
         with st.spinner(f"{location_name} 평일 점심 예보 확인 중..."):
@@ -139,7 +164,8 @@ with tab2:
                     today_pop_dict = pop_dict.copy()
                 pm10, pm10_grade, pm10_time = get_air_quality(location_name)
                 temp_avg, pop_max = calc_lunch_summary(temp_dict_show if is_today else tmp_dict, pop_dict)
-                result_str, possible = judge_lunch(temp_dict_show if is_today else tmp_dict, pop_dict, pm10_grade)
+                result_str, possible, reason_str = judge_lunch(temp_dict_show if is_today else tmp_dict, pop_dict, pm10_grade)
+                uv_index = get_uv_index(area_no, base_date + "12") if area_no else None
                 if temp_avg is not None and pop_max is not None:
                     data_found = True
                 pm10_str = f"{pm10} ({dust_grade_to_text(pm10_grade)})" if pm10 and pm10_grade else "정보없음"
@@ -149,11 +175,13 @@ with tab2:
                     "점심시간 기온(°C)": temp_avg,
                     "점심시간 강수확률(%)": pop_max,
                     "미세먼지(PM10)": pm10_str,
+                    "자외선지수(UV)": uv_index if uv_index else "정보없음",
                     "점심시간 운동장": "가능" if possible else "불가",
-                    "사유": result_str
+                    "사유": result_str,
+                    "설명": reason_str
                 })
                 if is_today:
-                    today_result_str, today_possible = result_str, possible
+                    today_result_str, today_possible, today_reason = result_str, possible, reason_str
         df = pd.DataFrame(results)
         st.dataframe(df, use_container_width=True, hide_index=True)
         if not data_found:
@@ -163,10 +191,11 @@ with tab2:
         if today_possible is None or today_result_str == "":
             st.info("오늘 정보가 아직 공개되지 않았어요.")
         elif today_possible:
-            st.success("오늘은 점심시간에 나가도 돼요! 🎉 (기온: 22도 or 실제값)")
+            st.success("오늘은 점심시간에 나가도 돼요! 🎉")
+            st.caption(f"사유: {today_reason}")
         else:
             st.error("오늘은 점심시간에 나갈 수 없어요. 😭")
-            st.caption(today_result_str)
+            st.caption(f"사유: {today_reason}")
         if today_tmp_dict:
             st.caption(f"오늘(성남시 분당구) 12/13시 기온: {today_tmp_dict.get('12')}°C / {today_tmp_dict.get('13')}°C")
     else:
