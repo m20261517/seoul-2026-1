@@ -2,13 +2,14 @@ import requests
 import pandas as pd
 import streamlit as st
 import datetime
-from urllib.parse import quote
+import urllib.parse
 
 # ==========================================
-# 1. API 키 및 지역 설정 (경기도 주요 모든 시/군 추가)
+# 1. API 키 설정 및 디코딩 (공공데이터포털 통신 오류 방지)
 # ==========================================
 SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
-ENCODED_KEY = quote(SERVICE_KEY, safe='')
+# API 키가 이미 인코딩되어 있을 경우를 대비해 확실하게 디코딩(unquote) 처리
+DECODED_KEY = urllib.parse.unquote(SERVICE_KEY)
 
 # 경기도 주요 시/군 행정표준코드 및 기상청 격자 좌표(nx, ny)
 AREA_NO = {
@@ -40,15 +41,19 @@ LOCATIONS = {
 }
 
 # ==========================================
-# 2. 데이터 수집 함수 (미세먼지 제거됨)
+# 2. 데이터 수집 함수 (인코딩/디코딩 로직 개선)
 # ==========================================
 def get_uv_index(area_no, yyyymmddhh):
-    url = (
-        f"http://apis.data.go.kr/1360000/LivingWthrIdxServiceV4/getUVIdxV4"
-        f"?serviceKey={SERVICE_KEY}&areaNo={area_no}&time={yyyymmddhh}&dataType=JSON"
-    )
+    url = "http://apis.data.go.kr/1360000/LivingWthrIdxServiceV4/getUVIdxV4"
+    # params 딕셔너리로 넘기면 requests가 스트림릿 환경에 맞게 안전하게 URL 인코딩을 자동으로 해줌
+    params = {
+        "serviceKey": DECODED_KEY,
+        "areaNo": area_no,
+        "time": yyyymmddhh,
+        "dataType": "JSON"
+    }
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, params=params, timeout=5)
         items = res.json()["response"]["body"]["items"]["item"]
         uv_today = items[0].get("today")
         return uv_today
@@ -56,14 +61,20 @@ def get_uv_index(area_no, yyyymmddhh):
         return None
 
 def fetch_weather(base_date, nx, ny, base_time="1100", target_hours=["12","13"]):
-    url = (
-        f"http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
-        f"?serviceKey={ENCODED_KEY}&numOfRows=100&pageNo=1&dataType=JSON"
-        f"&base_date={base_date}&base_time={base_time}&nx={nx}&ny={ny}"
-    )
+    url = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
+    params = {
+        "serviceKey": DECODED_KEY,
+        "numOfRows": "100",
+        "pageNo": "1",
+        "dataType": "JSON",
+        "base_date": base_date,
+        "base_time": base_time,
+        "nx": nx,
+        "ny": ny
+    }
     TMPs, POPs = {}, {}
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, params=params, timeout=5)
         items = res.json()["response"]["body"]["items"]["item"]
         for h in target_hours:
             tmp = next((float(i["fcstValue"]) for i in items if i["category"] == "TMP" and i["fcstTime"].startswith(h)), None)
