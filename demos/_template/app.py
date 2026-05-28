@@ -1,15 +1,13 @@
 import datetime
 from dataclasses import dataclass
 
-import pandas as pd
 import requests
 import streamlit as st
 from urllib.parse import quote
 
 # =========================================================
-# 점심시간 야외활동 추천 (경기도 '시' 단위)
-# - 미세먼지(PM10) 기능 전면 삭제
-# - 기온(TMP) + 강수확률(POP)만으로 판단
+# 초등 점심시간 야외활동 추천 (오늘만)
+# - 기상청 단기예보(동네예보) API로 오늘 12~13시 기온(TMP) + 강수확률(POP)만 사용
 # - 장소 우선순위: 운동장 > 필로티 > 교실
 # - 오늘 알림 UI: 배너 + 추천놀이 3개 + 안전수칙
 # =========================================================
@@ -19,7 +17,6 @@ SERVICE_KEY = "12843209762a114e91bf146bb7787cf097c0a7d77e477d66d521e2f9d17b2263"
 ENCODED_KEY = quote(SERVICE_KEY, safe="")
 
 # 경기도 '시' 단위(군 제외) 대표 격자(nx, ny)
-# (정확도를 높이려면 주소->격자 변환을 붙이거나 학교 위치에 맞게 조정하세요.)
 GYEONGGI_CITIES = {
     "고양시": (57, 128),
     "과천시": (60, 124),
@@ -93,57 +90,83 @@ PLACE_PLANS: dict[str, PlacePlan] = {
 }
 
 
+# -----------------------------
+# 단기예보 base_date/base_time 자동 선택
+# -----------------------------
+PUBLISH_TIMES = ["0200", "0500", "0800", "1100", "1400", "1700", "2000", "2300"]
+
+
+def pick_base_datetime(now: datetime.datetime | None = None) -> tuple[str, str]:
+    """현재시각 기준으로 가장 최근 발표시각의 base_date/base_time을 계산합니다."""
+    if now is None:
+        now = datetime.datetime.now()
+
+    today = now.date()
+    hhmm = now.strftime("%H%M")
+
+    candidates = [t for t in PUBLISH_TIMES if t <= hhmm]
+    if candidates:
+        return today.strftime("%Y%m%d"), candidates[-1]
+
+    # 새벽 2시 이전이면 전날 23시 발표
+    yday = today - datetime.timedelta(days=1)
+    return yday.strftime("%Y%m%d"), "2300"
+
+
 @st.cache_data(ttl=60 * 10)
-def fetch_weather(base_date: str, nx: int, ny: int, base_time: str = "1100", target_hours=TARGET_HOURS):
-    """기상청 동네예보에서 12/13시 기온(TMP), 강수확률(POP)을 가져옵니다."""
-    url = (
-        "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
-        f"?serviceKey={ENCODED_KEY}&numOfRows=300&pageNo=1&dataType=JSON"
-        f"&base_date={base_date}&base_time={base_time}&nx={nx}&ny={ny}"
-    )
+def fetch_today_lunch_forecast(nx: int, ny: int) -> tuple[dict, dict, str, str]:
+    """오늘(12/13시) TMP/POP만 뽑아서 반환합니다.
 
-    TMPs, POPs = {}, {}
-    try:
-        res = requests.get(url, timeout=8)
-        items = res.json()["response"]["body"]["items"]["item"]
+    Returns:
+      (tmp_dict, pop_dict, base_date, base_time)
+    """
+    base_date, base_time = pick_base_datetime()
+    today = datetime.date.today().strftime("%Y%m%d")
 
-        for h in target_hours:
-            tmp = next(
-                (
-                    float(i["fcstValue"])
-                    for i in items
-                    if i["category"] == "TMP" and str(i["fcstTime"]).startswith(h)
-                ),
-                None,
-            )
-            pop = next(
-                (
-                    float(i["fcstValue"])
-                    for i in items
-                    if i["category"] == "POP" and str(i["fcstTime"]).startswith(h)
-                ),
-                None,
-            )
-            TMPs[h] = tmp
-            POPs[h] = pop
+    url = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst"
+    params = {
+        "serviceKey": ENCODED_KEY,  # 이미 quote 처리된 key
+        "numOfRows": "1000",
+        "pageNo": "1",
+        "dataType": "JSON",
+        "base_date": base_date,
+        "base_time": base_time,
+        "nx": str(nx),
+        "ny": str(ny),
+    }
 
-        return TMPs, POPs
-    except Exception:
-        return {h: None for h in target_hours}, {h: None for h in target_hours}
+    res = requests.get(url, params=params, timeout=12)
+    res.raise_for_status()
+    payload = res.json()
+    items = payload["response"]["body"]["items"]["item"]
+
+    tmp_dict = {"12": None, "13": None}
+    pop_dict = {"12": None, "13": None}
+
+    for it in items:
+        if it.get("fcstDate") != today:
+            continue
+        fcst_time = str(it.get("fcstTime", ""))  # "1200"
+        if not any(fcst_time.startswith(h) for h in TARGET_HOURS):
+            continue
+        hour_key = "12" if fcst_time.startswith("12") else "13"
+
+        cat = it.get("category")
+        try:
+            val = float(it.get("fcstValue"))
+        except Exception:
+            val = None
+
+        if cat == "TMP":
+            tmp_dict[hour_key] = val
+        elif cat == "POP":
+            pop_dict[hour_key] = val
+
+    return tmp_dict, pop_dict, base_date, base_time
 
 
 def _has_all_hours(tmp_dict: dict, pop_dict: dict) -> bool:
     return all(tmp_dict.get(h) is not None and pop_dict.get(h) is not None for h in ["12", "13"])
-
-
-def calc_lunch_summary(tmp_dict: dict, pop_dict: dict):
-    temps = [t for t in [tmp_dict.get("12"), tmp_dict.get("13")] if t is not None]
-    pops = [p for p in [pop_dict.get("12"), pop_dict.get("13")] if p is not None]
-
-    temp_avg = round(sum(temps) / len(temps), 1) if temps else None
-    pop_max = max(pops) if pops else None
-
-    return temp_avg, pop_max
 
 
 def judge_lunch(tmp_dict: dict, pop_dict: dict):
@@ -222,84 +245,37 @@ def render_today_section(place_code: str, headline: str, reason: str):
 # Streamlit UI
 # -----------------------------
 
-st.set_page_config(page_title="점심시간 야외활동 추천", page_icon="🌤️", layout="wide")
+st.set_page_config(page_title="오늘 점심시간 어디서 놀까요?", page_icon="🌤️", layout="wide")
 
-st.title("🌤️ 점심시간 야외활동 추천")
-st.caption("경기도 도시(시) 기준, 평일 점심(12~13시) 기온/강수확률 예보로 운동장·필로티·교실을 추천합니다.")
+st.title("🌤️ 오늘 점심시간 어디서 놀까요?")
+st.caption("경기도 도시(시) 기준, 오늘 12~13시 기온/강수확률 예보로 운동장·필로티·교실을 추천합니다.")
 
-tab1, tab2 = st.tabs(["도시/주간 선택", "평일 점심시간 추천(월~금)"])
+city = st.selectbox("경기도 도시(시)를 선택하세요", sorted(GYEONGGI_CITIES.keys()))
+nx, ny = GYEONGGI_CITIES[city]
 
-with tab1:
-    today = datetime.date.today()
-    city = st.selectbox("경기도 도시(시)를 선택하세요", sorted(GYEONGGI_CITIES.keys()))
+st.markdown("---")
 
-    monday = today - datetime.timedelta(days=today.weekday())
-    week_dates = [monday + datetime.timedelta(days=i) for i in range(5)]
+try:
+    tmp_dict, pop_dict, base_date, base_time = fetch_today_lunch_forecast(nx, ny)
+except Exception as e:
+    st.error("날씨 API 호출에 실패했어요. (서비스키/네트워크/API 상태 확인 필요)")
+    st.code(str(e))
+    st.stop()
 
-    st.write(
-        "이번 주(월~금):",
-        " ~ ".join([week_dates[0].strftime("%Y-%m-%d"), week_dates[-1].strftime("%Y-%m-%d")]),
-    )
+headline, place_code, reason = judge_lunch(tmp_dict, pop_dict)
 
-    st.session_state["city"] = city
-    st.session_state["week_dates"] = week_dates
+st.subheader(f"{city} · 오늘({datetime.date.today().strftime('%Y-%m-%d')}) 점심시간 예보")
 
-with tab2:
-    if "city" not in st.session_state or "week_dates" not in st.session_state:
-        st.info("'도시/주간 선택' 탭에서 도시를 먼저 선택해주세요.")
-        st.stop()
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("12시 기온", "정보없음" if tmp_dict.get("12") is None else f"{tmp_dict.get('12')} °C")
+    st.metric("13시 기온", "정보없음" if tmp_dict.get("13") is None else f"{tmp_dict.get('13')} °C")
+with col2:
+    st.metric("12시 강수확률", "정보없음" if pop_dict.get("12") is None else f"{int(pop_dict.get('12'))} %")
+    st.metric("13시 강수확률", "정보없음" if pop_dict.get("13") is None else f"{int(pop_dict.get('13'))} %")
 
-    city = st.session_state["city"]
-    week_dates = st.session_state["week_dates"]
-    nx, ny = GYEONGGI_CITIES[city]
+st.caption(f"(조회 기준 발표시각: base_date={base_date}, base_time={base_time})")
 
-    results = []
-    data_found = False
-
-    today_place_code = None
-    today_headline = ""
-    today_reason = ""
-
-    with st.spinner(f"{city} 평일 점심 예보 확인 중..."):
-        for d in week_dates:
-            base_date = d.strftime("%Y%m%d")
-            tmp_dict, pop_dict = fetch_weather(base_date, nx, ny, base_time="1100", target_hours=TARGET_HOURS)
-
-            temp_avg, pop_max = calc_lunch_summary(tmp_dict, pop_dict)
-            headline, place_code, reason = judge_lunch(tmp_dict, pop_dict)
-
-            if temp_avg is not None and pop_max is not None:
-                data_found = True
-
-            results.append(
-                {
-                    "날짜": d.strftime("%Y-%m-%d"),
-                    "요일": "월화수목금"[d.weekday()],
-                    "점심시간 기온(°C)": temp_avg,
-                    "점심시간 강수확률(%)": pop_max,
-                    "추천 장소": PLACE_PLANS[place_code].label,
-                    "상태코드": place_code,
-                    "판정": headline,
-                    "설명": reason,
-                }
-            )
-
-            if d == datetime.date.today():
-                today_place_code = place_code
-                today_headline = headline
-                today_reason = reason
-
-    df = pd.DataFrame(results)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-    if not data_found:
-        st.info("일기예보 발표 후에 안내드릴게요")
-
-    st.markdown("---")
-    st.subheader("오늘 점심시간 알림")
-
-    if today_place_code is None:
-        st.info("오늘 정보가 아직 공개되지 않았어요.")
-        st.stop()
-
-    render_today_section(today_place_code, today_headline, today_reason)
+st.markdown("---")
+st.subheader("오늘 점심시간 알림")
+render_today_section(place_code, headline, reason)
